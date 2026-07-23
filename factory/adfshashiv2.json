@@ -1,0 +1,15 @@
+{
+	"name": "adfshashiv2",
+	"properties": {
+		"trustModeClaimForMi": {
+			"value": "Enabled",
+			"editable": true
+		}
+	},
+	"location": "eastus",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "75afe21c-fc23-4ec9-bb28-c41f9d52c3a9",
+		"tenantId": "e0793d39-0939-496d-b129-198edd916feb"
+	}
+}
