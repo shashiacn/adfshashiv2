@@ -3,15 +3,26 @@
 	"properties": {
 		"activities": [
 			{
-				"name": "MyWaitActivity",
-				"type": "Wait",
+				"name": "UpdateEnvironmentVariable",
+				"type": "SetVariable",
 				"dependsOn": [],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
 				"userProperties": [],
 				"typeProperties": {
-					"waitTimeInSeconds": 5
+					"variableName": "EnvironmentName",
+					"value": "Staging"
 				}
 			}
 		],
+		"variables": {
+			"EnvironmentName": {
+				"type": "String",
+				"defaultValue": "Production"
+			}
+		},
 		"annotations": []
 	}
 }
