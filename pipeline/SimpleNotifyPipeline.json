@@ -1,48 +1,49 @@
 {
-	"name": "SimpleNotifyPipeline",
-	"properties": {
-		"description": "Waits for 1 minute then sends a notification",
-		"activities": [
-			{
-				"name": "WaitActivity",
-				"description": "Wait for 1 minute",
-				"type": "Wait",
-				"dependsOn": [],
-				"userProperties": [],
-				"typeProperties": {
-					"waitTimeInSeconds": 8
-				}
-			},
-			{
-				"name": "SetStatusVariable",
-				"type": "SetVariable",
-				"dependsOn": [
-					{
-						"activity": "WaitActivity",
-						"dependencyConditions": [
-							"Succeeded"
-						]
-					}
-				],
-				"policy": {
-					"secureOutput": false,
-					"secureInput": false
-				},
-				"userProperties": [],
-				"typeProperties": {
-					"variableName": "FinalStatusMessage",
-					"value": {
-						"value": "@pipeline().RunId",
-						"type": "Expression"
-					}
-				}
-			}
-		],
-		"variables": {
-			"FinalStatusMessage": {
-				"type": "String"
-			}
-		},
-		"annotations": []
-	}
+    "name": "SimpleNotifyPipeline",
+    "properties": {
+        "description": "Waits for 1 minute then sends a notification",
+        "activities": [
+            {
+                "name": "WaitActivity",
+                "description": "Wait for 1 minute",
+                "type": "Wait",
+                "dependsOn": [],
+                "userProperties": [],
+                "typeProperties": {
+                    "waitTimeInSeconds": 8
+                }
+            },
+            {
+                "name": "SetStatusVariable",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "WaitActivity",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "FinalStatusMessage",
+                    "value": {
+                        "value": "@pipeline().Status",
+                        "type": "Expression"
+                    }
+                }
+            }
+        ],
+        "variables": {
+            "FinalStatusMessage": {
+                "type": "String",
+                "defaultValue": "Shashi"
+            }
+        },
+        "annotations": []
+    }
 }
