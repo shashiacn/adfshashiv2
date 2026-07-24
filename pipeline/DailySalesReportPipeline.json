@@ -1,0 +1,114 @@
+{
+    "name": "DailySalesReportPipeline",
+    "properties": {
+        "description": "Automates daily sales report with validation, processing, notification and logging",
+        "activities": [
+
+            {
+                "name": "ValidateData",
+                "description": "Check if data is available for processing",
+                "type": "Validation",
+                "typeProperties": {
+                    "timeout": "0.00:10:00",
+                    "sleep": 10,
+                    "minimumSize": 1
+                }
+            },
+
+            {
+                "name": "CheckDataQuality",
+                "description": "If data is valid, process it. If not, send failure alert.",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "ValidateData",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@greater(activity('ValidateData').output.size, 0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "ProcessSalesData",
+                            "description": "Transform and aggregate sales data",
+                            "type": "ExecutePipeline",
+                            "typeProperties": {
+                                "pipeline": {
+                                    "referenceName": "TransformSalesPipeline",
+                                    "type": "PipelineReference"
+                                },
+                                "waitOnCompletion": true
+                            }
+                        },
+                        {
+                            "name": "SendSuccessNotification",
+                            "description": "Email team on successful processing",
+                            "type": "WebActivity",
+                            "typeProperties": {
+                                "url": "https://your-logic-app-url/success",
+                                "method": "POST",
+                                "body": {
+                                    "message": "Daily Sales Report processed successfully",
+                                    "timestamp": "@utcnow()",
+                                    "status": "Success"
+                                }
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": [
+                        {
+                            "name": "SendFailureAlert",
+                            "description": "Alert team if data validation failed",
+                            "type": "WebActivity",
+                            "typeProperties": {
+                                "url": "https://your-logic-app-url/failure",
+                                "method": "POST",
+                                "body": {
+                                    "message": "Daily Sales Report FAILED - No data found",
+                                    "timestamp": "@utcnow()",
+                                    "status": "Failed"
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+
+            {
+                "name": "LogPipelineResult",
+                "description": "Log pipeline run details for audit",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "CheckDataQuality",
+                        "dependencyConditions": ["Succeeded", "Failed", "Skipped"]
+                    }
+                ],
+                "typeProperties": {
+                    "url": "https://your-logging-url/log",
+                    "method": "POST",
+                    "body": {
+                        "pipelineName": "@pipeline().Pipeline",
+                        "runId": "@pipeline().RunId",
+                        "timestamp": "@utcnow()",
+                        "status": "@activity('CheckDataQuality').Status"
+                    }
+                }
+            }
+        ],
+
+        "parameters": {
+            "ReportDate": {
+                "type": "String",
+                "defaultValue": "@formatDateTime(utcnow(), 'yyyy-MM-dd')"
+            },
+            "Environment": {
+                "type": "String",
+                "defaultValue": "Production"
+            }
+        }
+    }
+}
