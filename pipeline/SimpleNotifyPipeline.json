@@ -1,35 +1,43 @@
 {
-    "name": "SimpleNotifyPipeline",
-    "properties": {
-        "description": "Waits for 1 minute then sends a notification",
-        "activities": [
-            {
-                "name": "WaitActivity",
-                "description": "Wait for 1 minute",
-                "type": "Wait",
-                "typeProperties": {
-                    "waitTimeInSeconds": 60
-                }
-            },
-            {
-                "name": "SendNotification",
-                "description": "Send notification after wait",
-                "type": "WebActivity",
-                "dependsOn": [
-                    {
-                        "activity": "WaitActivity",
-                        "dependencyConditions": ["Succeeded"]
-                    }
-                ],
-                "typeProperties": {
-                    "url": "https://your-logic-app-url/notify",
-                    "method": "POST",
-                    "body": {
-                        "message": "Pipeline completed successfully!",
-                        "timestamp": "@utcnow()"
-                    }
-                }
-            }
-        ]
-    }
+	"name": "SimpleNotifyPipeline",
+	"properties": {
+		"description": "Waits for 1 minute then sends a notification",
+		"activities": [
+			{
+				"name": "WaitActivity",
+				"description": "Wait for 1 minute",
+				"type": "Wait",
+				"dependsOn": [],
+				"userProperties": [],
+				"typeProperties": {
+					"waitTimeInSeconds": 60
+				}
+			},
+			{
+				"name": "SetStatusVariable",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "WaitActivity",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "FinalStatusMessage",
+					"value": {
+						"value": "@concat('Pipeline executed successfully after a ', activity('InitializeDelay').output.duration, ' second delay.')",
+						"type": "Expression"
+					}
+				}
+			}
+		],
+		"annotations": []
+	}
 }
