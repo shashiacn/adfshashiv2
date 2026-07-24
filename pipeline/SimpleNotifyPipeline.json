@@ -32,12 +32,17 @@
 				"typeProperties": {
 					"variableName": "FinalStatusMessage",
 					"value": {
-						"value": "@concat('Pipeline executed successfully after a ', activity('InitializeDelay').output.duration, ' second delay.')",
+						"value": "@pipeline().RunId",
 						"type": "Expression"
 					}
 				}
 			}
 		],
+		"variables": {
+			"FinalStatusMessage": {
+				"type": "String"
+			}
+		},
 		"annotations": []
 	}
 }
