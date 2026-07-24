@@ -1,0 +1,45 @@
+{
+	"name": "pipeline1",
+	"properties": {
+		"activities": [
+			{
+				"name": "InitializeDelay",
+				"type": "Wait",
+				"userProperties": [],
+				"typeProperties": {
+					"waitTimeInSeconds": 8
+				}
+			},
+			{
+				"name": "SetStatusVariable",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "InitializeDelay",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "FinalStatusMessage",
+					"value": {
+						"value": "@concat('Pipeline executed successfully after a ', activity('InitializeDelay').output.duration, ' second delay.')",
+						"type": "Expression"
+					}
+				}
+			}
+		],
+		"variables": {
+			"FinalStatusMessage": {
+				"type": "String"
+			}
+		},
+		"annotations": []
+	}
+}
