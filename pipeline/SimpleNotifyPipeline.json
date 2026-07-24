@@ -1,0 +1,35 @@
+{
+    "name": "SimpleNotifyPipeline",
+    "properties": {
+        "description": "Waits for 1 minute then sends a notification",
+        "activities": [
+            {
+                "name": "WaitActivity",
+                "description": "Wait for 1 minute",
+                "type": "Wait",
+                "typeProperties": {
+                    "waitTimeInSeconds": 60
+                }
+            },
+            {
+                "name": "SendNotification",
+                "description": "Send notification after wait",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "WaitActivity",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "url": "https://your-logic-app-url/notify",
+                    "method": "POST",
+                    "body": {
+                        "message": "Pipeline completed successfully!",
+                        "timestamp": "@utcnow()"
+                    }
+                }
+            }
+        ]
+    }
+}
