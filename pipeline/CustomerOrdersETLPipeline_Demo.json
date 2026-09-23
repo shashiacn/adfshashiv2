@@ -1,6 +1,854 @@
 {
 	"name": "CustomerOrdersETLPipeline_Demo",
 	"properties": {
-		"annotations": []
+		"description": "DEMO ONLY - Customer Orders ETL pipeline for GitHub Copilot code generation demo. Uses mock endpoints and simulated data. No real connections required.",
+		"activities": [
+			{
+				"name": "SetRunStartTime",
+				"description": "DEMO STEP 1: Capture pipeline start time for SLA tracking and audit",
+				"type": "SetVariable",
+				"dependsOn": [],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "RunStartTime",
+					"value": {
+						"value": "@utcnow()",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "UpdateAuditTrail_Start",
+				"description": "DEMO STEP 2: Append pipeline start event to audit trail variable",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "SetRunStartTime",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "AuditTrail",
+					"value": {
+						"value": "@concat('STARTED:', variables('RunStartTime'), ' | ENV:', pipeline().parameters.Environment, ' | REGION:', pipeline().parameters.Region)",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "FetchOrdersFromAPI",
+				"description": "DEMO STEP 3: Simulate REST API call to fetch customer orders. In real scenario: connects to orders microservice",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "UpdateAuditTrail_Start",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.00:05:00",
+					"retry": 3,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": true
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "GET",
+					"headers": {
+						"x-demo-date": {
+							"value": "@pipeline().parameters.OrderDate",
+							"type": "Expression"
+						},
+						"x-demo-region": {
+							"value": "@pipeline().parameters.Region",
+							"type": "Expression"
+						},
+						"x-correlation-id": {
+							"value": "@pipeline().RunId",
+							"type": "Expression"
+						},
+						"x-environment": {
+							"value": "@pipeline().parameters.Environment",
+							"type": "Expression"
+						}
+					},
+					"url": {
+						"value": "@concat('https://httpbin.org/json')",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "CheckAPIResponse",
+				"description": "DEMO STEP 4: Validate API returned data. Routes to full ETL (true) or no-data alert (false)",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "FetchOrdersFromAPI",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@not(empty(activity('FetchOrdersFromAPI').output))",
+						"type": "Expression"
+					},
+					"ifFalseActivities": [
+						{
+							"name": "LogNoOrdersFound",
+							"description": "DEMO: Alert team when API returns zero orders for given date/region",
+							"type": "WebActivity",
+							"dependsOn": [],
+							"policy": {
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"url": "https://httpbin.org/post",
+								"body": {
+									"alertType": "NO_ORDERS_FOUND",
+									"orderDate": "@pipeline().parameters.OrderDate",
+									"region": "@pipeline().parameters.Region",
+									"message": "@concat('No orders found for region: ', pipeline().parameters.Region, ' on date: ', pipeline().parameters.OrderDate)",
+									"notifyEmail": "@pipeline().parameters.NotifyEmail",
+									"environment": "@pipeline().parameters.Environment"
+								}
+							}
+						},
+						{
+							"name": "SetStatus_NoData",
+							"description": "DEMO: Mark pipeline as completed with no data",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "LogNoOrdersFound",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "PipelineStatus",
+								"value": "Completed_NoData"
+							}
+						}
+					],
+					"ifTrueActivities": [
+						{
+							"name": "ValidateOrderSchema",
+							"description": "DEMO: Validate each order has required fields - orderId, customerId, totalAmount",
+							"type": "SetVariable",
+							"dependsOn": [],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "AuditTrail",
+								"value": {
+									"value": "@concat(variables('AuditTrail'), ' | VALIDATED:', utcnow())",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "WaitForStagingReady",
+							"description": "DEMO: Simulate wait for staging environment readiness check",
+							"type": "Wait",
+							"dependsOn": [
+								{
+									"activity": "ValidateOrderSchema",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"waitTimeInSeconds": 5
+							}
+						},
+						{
+							"name": "TransformOrders_Currency",
+							"description": "DEMO: Simulate currency conversion - EUR x1.08, GBP x1.27, others x1.0",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "WaitForStagingReady",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "AuditTrail",
+								"value": {
+									"value": "@concat(variables('AuditTrail'), ' | CURRENCY_CONVERTED:', pipeline().parameters.Currency, '->', 'USD')",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "FilterLowValueOrders",
+							"description": "DEMO: Simulate filtering orders below MinOrderValue and above MaxOrderValue",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "TransformOrders_Currency",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "TotalOrdersRejected",
+								"value": {
+									"value": "@int('12')",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "EnrichWithProductData",
+							"description": "DEMO: Simulate product catalog enrichment - adds product name, category, margin",
+							"type": "WebActivity",
+							"dependsOn": [
+								{
+									"activity": "FilterLowValueOrders",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.00:02:00",
+								"retry": 2,
+								"retryIntervalInSeconds": 30
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"headers": {
+									"Content-Type": "application/json"
+								},
+								"url": "https://httpbin.org/post",
+								"body": {
+									"action": "enrich_product_data",
+									"orderDate": "@pipeline().parameters.OrderDate",
+									"region": "@pipeline().parameters.Region",
+									"batchSize": "@pipeline().parameters.BatchSize",
+									"currency": "@pipeline().parameters.Currency",
+									"environment": "@pipeline().parameters.Environment",
+									"correlationId": "@pipeline().RunId"
+								}
+							}
+						},
+						{
+							"name": "CheckEnrichmentResult",
+							"description": "DEMO: Switch based on enrichment status — Full, Partial, or Failed",
+							"type": "Switch",
+							"dependsOn": [
+								{
+									"activity": "EnrichWithProductData",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"on": {
+									"value": "@pipeline().parameters.Environment",
+									"type": "Expression"
+								},
+								"cases": [
+									{
+										"value": "Production",
+										"activities": [
+											{
+												"name": "SetStatus_Production",
+												"type": "SetVariable",
+												"dependsOn": [],
+												"policy": {
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"variableName": "PipelineStatus",
+													"value": "Production_Enriched"
+												}
+											}
+										]
+									},
+									{
+										"value": "Demo",
+										"activities": [
+											{
+												"name": "SetStatus_Demo",
+												"type": "SetVariable",
+												"dependsOn": [],
+												"policy": {
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"variableName": "PipelineStatus",
+													"value": "Demo_Enriched"
+												}
+											}
+										]
+									}
+								],
+								"defaultActivities": [
+									{
+										"name": "SetStatus_Default",
+										"type": "SetVariable",
+										"dependsOn": [],
+										"policy": {
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"variableName": "PipelineStatus",
+											"value": "Partial_Enriched"
+										}
+									}
+								]
+							}
+						},
+						{
+							"name": "ProcessOrderBatches",
+							"description": "DEMO: ForEach loop — process orders in parallel batches across regions",
+							"type": "ForEach",
+							"dependsOn": [
+								{
+									"activity": "CheckEnrichmentResult",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"items": {
+									"value": "@createArray('US', 'EU', 'APAC')",
+									"type": "Expression"
+								},
+								"isSequential": false,
+								"batchCount": 3,
+								"activities": [
+									{
+										"name": "ProcessRegionBatch",
+										"description": "DEMO: Simulate processing each region batch via mock API",
+										"type": "WebActivity",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "0.00:03:00",
+											"retry": "@pipeline().parameters.RetryCount",
+											"retryIntervalInSeconds": 30
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"method": "POST",
+											"url": "https://httpbin.org/post",
+											"body": {
+												"action": "process_batch",
+												"region": "@item()",
+												"orderDate": "@pipeline().parameters.OrderDate",
+												"batchSize": "@pipeline().parameters.BatchSize",
+												"minOrderValue": "@pipeline().parameters.MinOrderValue",
+												"maxOrderValue": "@pipeline().parameters.MaxOrderValue",
+												"currency": "@pipeline().parameters.Currency",
+												"runId": "@pipeline().RunId"
+											}
+										}
+									}
+								]
+							}
+						},
+						{
+							"name": "SimulateLoadToSQL",
+							"description": "DEMO: Simulate upsert to Azure SQL. Real scenario uses sp_UpsertCustomerOrders stored procedure",
+							"type": "WebActivity",
+							"dependsOn": [
+								{
+									"activity": "ProcessOrderBatches",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.00:10:00",
+								"retry": 3,
+								"retryIntervalInSeconds": 60
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"url": "https://httpbin.org/post",
+								"body": {
+									"action": "upsert_orders",
+									"targetTable": "@concat('orders_', replace(pipeline().parameters.Region, '-', '_'), '_', formatDateTime(pipeline().parameters.OrderDate, 'yyyyMMdd'))",
+									"orderDate": "@pipeline().parameters.OrderDate",
+									"region": "@pipeline().parameters.Region",
+									"batchSize": "@pipeline().parameters.BatchSize",
+									"upsertKey": "order_id",
+									"parallelCopies": 4,
+									"writeBatchSize": 5000
+								}
+							}
+						},
+						{
+							"name": "UpdateOrderStats",
+							"description": "DEMO: Update TotalOrdersIngested variable from simulated load result",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "SimulateLoadToSQL",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "TotalOrdersIngested",
+								"value": {
+									"value": "@int('2450')",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "UpdateRevenue",
+							"description": "DEMO: Update TotalRevenue variable from simulated aggregation",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "UpdateOrderStats",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "TotalRevenue",
+								"value": {
+									"value": "@float('128450.75')",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "TriggerInventoryUpdate",
+							"description": "DEMO: Notify downstream inventory service after orders loaded",
+							"type": "WebActivity",
+							"dependsOn": [
+								{
+									"activity": "UpdateRevenue",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.00:02:00",
+								"retry": 2,
+								"retryIntervalInSeconds": 30
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"url": "https://httpbin.org/post",
+								"body": {
+									"action": "update_inventory",
+									"orderDate": "@pipeline().parameters.OrderDate",
+									"region": "@pipeline().parameters.Region",
+									"ordersProcessed": "@variables('TotalOrdersIngested')",
+									"revenue": "@variables('TotalRevenue')",
+									"triggeredBy": "@pipeline().RunId",
+									"environment": "@pipeline().parameters.Environment"
+								}
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "CheckSLABreach",
+				"description": "DEMO STEP 5: Check if pipeline exceeded 1 hour SLA threshold",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "CheckAPIResponse",
+						"dependencyConditions": [
+							"Succeeded",
+							"Skipped"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@greater(div(sub(ticks(utcnow()), ticks(variables('RunStartTime'))), 10000000), 3600)",
+						"type": "Expression"
+					},
+					"ifFalseActivities": [
+						{
+							"name": "SetStatus_WithinSLA",
+							"description": "DEMO: Mark pipeline as within SLA",
+							"type": "SetVariable",
+							"dependsOn": [],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "PipelineStatus",
+								"value": "Completed_WithinSLA"
+							}
+						}
+					],
+					"ifTrueActivities": [
+						{
+							"name": "SendSLABreachAlert",
+							"description": "DEMO: Fire SLA breach alert to on-call team",
+							"type": "WebActivity",
+							"dependsOn": [],
+							"policy": {
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"url": "https://httpbin.org/post",
+								"body": {
+									"alertType": "SLA_BREACH",
+									"pipelineName": "@pipeline().Pipeline",
+									"runId": "@pipeline().RunId",
+									"message": "Pipeline exceeded 1 hour SLA threshold",
+									"notifyEmail": "@pipeline().parameters.NotifyEmail",
+									"environment": "@pipeline().parameters.Environment"
+								}
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "RunOrderSummaryReport",
+				"description": "DEMO STEP 6: Simulate stored procedure to generate daily order summary report",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "CheckSLABreach",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.00:05:00",
+					"retry": 1,
+					"retryIntervalInSeconds": 30
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://httpbin.org/post",
+					"body": {
+						"action": "generate_summary_report",
+						"storedProcedure": "sp_GenerateDailyOrderSummary",
+						"orderDate": "@pipeline().parameters.OrderDate",
+						"region": "@pipeline().parameters.Region",
+						"totalOrders": "@variables('TotalOrdersIngested')",
+						"totalRejected": "@variables('TotalOrdersRejected')",
+						"totalRevenue": "@variables('TotalRevenue')",
+						"runId": "@pipeline().RunId",
+						"environment": "@pipeline().parameters.Environment"
+					}
+				}
+			},
+			{
+				"name": "SendDailySummaryEmail",
+				"description": "DEMO STEP 7: Send daily summary report email to orders team",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "RunOrderSummaryReport",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://httpbin.org/post",
+					"body": {
+						"action": "send_email",
+						"to": "@pipeline().parameters.NotifyEmail",
+						"subject": "@concat('[', pipeline().parameters.Environment, '] Daily Orders Summary — ', pipeline().parameters.Region, ' — ', pipeline().parameters.OrderDate)",
+						"body": {
+							"ordersIngested": "@variables('TotalOrdersIngested')",
+							"ordersRejected": "@variables('TotalOrdersRejected')",
+							"totalRevenue": "@variables('TotalRevenue')",
+							"currency": "@pipeline().parameters.Currency",
+							"region": "@pipeline().parameters.Region",
+							"orderDate": "@pipeline().parameters.OrderDate",
+							"pipelineStatus": "@variables('PipelineStatus')",
+							"auditTrail": "@variables('AuditTrail')",
+							"runDurationSeconds": "@div(sub(ticks(utcnow()), ticks(variables('RunStartTime'))), 10000000)",
+							"environment": "@pipeline().parameters.Environment"
+						}
+					}
+				}
+			},
+			{
+				"name": "HandlePipelineFailure",
+				"description": "DEMO ERROR HANDLER: Catches failures from API, batches, or SQL load — fires on-call alert",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "FetchOrdersFromAPI",
+						"dependencyConditions": [
+							"Failed"
+						]
+					},
+					{
+						"activity": "CheckAPIResponse",
+						"dependencyConditions": [
+							"Failed"
+						]
+					},
+					{
+						"activity": "RunOrderSummaryReport",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://httpbin.org/post",
+					"body": {
+						"action": "fire_oncall_alert",
+						"severity": "HIGH",
+						"alertType": "PIPELINE_FAILURE",
+						"pipelineName": "@pipeline().Pipeline",
+						"runId": "@pipeline().RunId",
+						"orderDate": "@pipeline().parameters.OrderDate",
+						"region": "@pipeline().parameters.Region",
+						"errorMessage": "@variables('ErrorMessage')",
+						"notifyEmail": "@pipeline().parameters.NotifyEmail",
+						"environment": "@pipeline().parameters.Environment",
+						"timestamp": "@utcnow()",
+						"auditTrail": "@variables('AuditTrail')"
+					}
+				}
+			},
+			{
+				"name": "FinalAuditLog",
+				"description": "DEMO STEP 8: Always-run compliance audit log — captures full run result",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "SendDailySummaryEmail",
+						"dependencyConditions": [
+							"Succeeded",
+							"Skipped"
+						]
+					},
+					{
+						"activity": "HandlePipelineFailure",
+						"dependencyConditions": [
+							"Succeeded",
+							"Skipped"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.00:02:00",
+					"retry": 3,
+					"retryIntervalInSeconds": 30
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://httpbin.org/post",
+					"body": {
+						"action": "write_audit_log",
+						"event": "PIPELINE_COMPLETED",
+						"pipelineName": "@pipeline().Pipeline",
+						"runId": "@pipeline().RunId",
+						"orderDate": "@pipeline().parameters.OrderDate",
+						"region": "@pipeline().parameters.Region",
+						"currency": "@pipeline().parameters.Currency",
+						"environment": "@pipeline().parameters.Environment",
+						"ordersIngested": "@variables('TotalOrdersIngested')",
+						"ordersRejected": "@variables('TotalOrdersRejected')",
+						"totalRevenue": "@variables('TotalRevenue')",
+						"finalStatus": "@variables('PipelineStatus')",
+						"auditTrail": "@variables('AuditTrail')",
+						"startTime": "@variables('RunStartTime')",
+						"endTime": "@utcnow()",
+						"durationSeconds": "@div(sub(ticks(utcnow()), ticks(variables('RunStartTime'))), 10000000)",
+						"enableAudit": "@pipeline().parameters.EnableAudit"
+					}
+				}
+			}
+		],
+		"concurrency": 1,
+		"policy": {
+			"elapsedTimeMetric": {
+				"duration": "0.02:00:00"
+			}
+		},
+		"parameters": {
+			"OrderDate": {
+				"type": "String",
+				"defaultValue": "2024-01-15"
+			},
+			"Region": {
+				"type": "String",
+				"defaultValue": "US"
+			},
+			"MinOrderValue": {
+				"type": "Float",
+				"defaultValue": 10
+			},
+			"MaxOrderValue": {
+				"type": "Float",
+				"defaultValue": 10000
+			},
+			"BatchSize": {
+				"type": "Int",
+				"defaultValue": 1000
+			},
+			"RetryCount": {
+				"type": "Int",
+				"defaultValue": 3
+			},
+			"NotifyEmail": {
+				"type": "String",
+				"defaultValue": "demo-team@contoso.com"
+			},
+			"Environment": {
+				"type": "String",
+				"defaultValue": "Demo"
+			},
+			"Currency": {
+				"type": "String",
+				"defaultValue": "USD"
+			},
+			"EnableAudit": {
+				"type": "Bool",
+				"defaultValue": true
+			}
+		},
+		"variables": {
+			"TotalOrdersIngested": {
+				"type": "Integer",
+				"defaultValue": 0
+			},
+			"TotalOrdersRejected": {
+				"type": "Integer",
+				"defaultValue": 0
+			},
+			"TotalRevenue": {
+				"type": "Float",
+				"defaultValue": "0"
+			},
+			"PipelineStatus": {
+				"type": "String",
+				"defaultValue": "Running"
+			},
+			"RunStartTime": {
+				"type": "String"
+			},
+			"AuditTrail": {
+				"type": "String"
+			},
+			"ErrorMessage": {
+				"type": "String"
+			},
+			"CurrentBatch": {
+				"type": "Integer",
+				"defaultValue": 1
+			}
+		},
+		"annotations": [
+			"Demo",
+			"CustomerOrders",
+			"GitHubCopilot",
+			"ETL",
+			"NoRealConnections"
+		]
 	}
 }
