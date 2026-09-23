@@ -1,6 +1,501 @@
 {
 	"name": "CustomerOrdersETLPipeline",
 	"properties": {
-		"annotations": []
+		"description": "Realistic ETL pipeline that ingests customer orders from REST API, validates, transforms, enriches with product data, loads to SQL, and sends summary report.",
+		"activities": [
+			{
+				"name": "SetRunStartTime",
+				"description": "Capture pipeline start time for SLA tracking",
+				"type": "SetVariable",
+				"dependsOn": [],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "RunStartTime",
+					"value": {
+						"value": "@utcnow()",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "FetchOrdersFromAPI",
+				"description": "Call REST API to fetch customer orders for the given date and region",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "SetRunStartTime",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.00:05:00",
+					"retry": 3,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": true
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "GET",
+					"headers": {
+						"Authorization": {
+							"value": "@concat('Bearer ', activity('FetchOrdersFromAPI').output.token)",
+							"type": "Expression"
+						},
+						"Content-Type": "application/json",
+						"x-correlation-id": {
+							"value": "@pipeline().RunId",
+							"type": "Expression"
+						}
+					},
+					"url": {
+						"value": "@concat('https://orders-api.company.com/v2/orders?date=', pipeline().parameters.OrderDate, '&region=', pipeline().parameters.Region)",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "CheckAPIResponse",
+				"description": "Validate API returned orders — if empty, skip processing",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "FetchOrdersFromAPI",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@greater(activity('FetchOrdersFromAPI').output.count, 0)",
+						"type": "Expression"
+					},
+					"ifFalseActivities": [
+						{
+							"name": "LogNoOrdersFound",
+							"description": "Log and notify that no orders were found for this date/region",
+							"type": "WebActivity",
+							"dependsOn": [],
+							"policy": {
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"url": "https://notify-service.company.com/api/alert",
+								"body": {
+									"alertType": "NO_ORDERS_FOUND",
+									"orderDate": "@pipeline().parameters.OrderDate",
+									"region": "@pipeline().parameters.Region",
+									"message": "@concat('No orders found for ', pipeline().parameters.Region, ' on ', pipeline().parameters.OrderDate)",
+									"notifyEmail": "@pipeline().parameters.NotifyEmail"
+								}
+							}
+						}
+					],
+					"ifTrueActivities": [
+						{
+							"name": "StageRawOrders",
+							"description": "Write raw API response to staging area for processing",
+							"type": "Copy",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.00:10:00",
+								"retry": 2,
+								"retryIntervalInSeconds": 60
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "RestSource",
+									"httpRequestTimeout": "00:03:00",
+									"requestInterval": "00.00:00:00.010"
+								},
+								"sink": {
+									"type": "JsonSink",
+									"storeSettings": {
+										"type": "AzureBlobStorageWriteSettings"
+									},
+									"formatSettings": {
+										"type": "JsonWriteSettings"
+									}
+								},
+								"enableStaging": false
+							}
+						},
+						{
+							"name": "ValidateAndTransformOrders",
+							"description": "Apply data quality rules, filter low-value orders, convert currency, enrich with product info",
+							"type": "ExecuteDataFlow",
+							"dependsOn": [
+								{
+									"activity": "StageRawOrders",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.01:00:00",
+								"retry": 2,
+								"retryIntervalInSeconds": 120
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"compute": {
+									"coreCount": 8,
+									"computeType": "MemoryOptimized"
+								},
+								"traceLevel": "Fine"
+							}
+						},
+						{
+							"name": "LoadOrdersToSQL",
+							"description": "Load validated and transformed orders into Azure SQL with upsert logic",
+							"type": "Copy",
+							"dependsOn": [
+								{
+									"activity": "ValidateAndTransformOrders",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.00:30:00",
+								"retry": 3,
+								"retryIntervalInSeconds": 60
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "ParquetSource",
+									"storeSettings": {
+										"type": "AzureBlobStorageReadSettings",
+										"recursive": false
+									}
+								},
+								"sink": {
+									"type": "AzureSqlSink",
+									"writeBatchSize": 5000,
+									"writeBatchTimeout": "00:05:00",
+									"sqlWriterStoredProcedureName": "sp_UpsertCustomerOrders",
+									"storedProcedureTableTypeParameterName": "OrdersTableType"
+								},
+								"enableStaging": true,
+								"parallelCopies": 4,
+								"dataIntegrationUnits": 8
+							}
+						},
+						{
+							"name": "UpdateOrderStats",
+							"description": "Update pipeline variables with order counts and revenue",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "LoadOrdersToSQL",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "TotalOrdersIngested",
+								"value": {
+									"value": "@activity('LoadOrdersToSQL').output.rowsCopied",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "TriggerInventoryUpdate",
+							"description": "Notify inventory service to update stock levels based on orders",
+							"type": "WebActivity",
+							"dependsOn": [
+								{
+									"activity": "UpdateOrderStats",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.00:02:00",
+								"retry": 2,
+								"retryIntervalInSeconds": 30
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "POST",
+								"headers": {
+									"Content-Type": "application/json"
+								},
+								"url": "https://inventory-service.company.com/api/update",
+								"body": {
+									"orderDate": "@pipeline().parameters.OrderDate",
+									"region": "@pipeline().parameters.Region",
+									"ordersProcessed": "@variables('TotalOrdersIngested')",
+									"triggeredBy": "@pipeline().RunId"
+								}
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "RunOrderSummaryReport",
+				"description": "Execute stored procedure to generate daily order summary report",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "CheckAPIResponse",
+						"dependencyConditions": [
+							"Succeeded",
+							"Skipped"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.00:10:00",
+					"retry": 1,
+					"retryIntervalInSeconds": 30
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "sp_GenerateDailyOrderSummary",
+					"storedProcedureParameters": {
+						"OrderDate": {
+							"value": {
+								"value": "@pipeline().parameters.OrderDate",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"Region": {
+							"value": {
+								"value": "@pipeline().parameters.Region",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"RunId": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "SendDailySummaryEmail",
+				"description": "Email order summary report to the orders team",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "RunOrderSummaryReport",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://email-service.company.com/api/send",
+					"body": {
+						"to": "@pipeline().parameters.NotifyEmail",
+						"subject": "@concat('Daily Orders Summary — ', pipeline().parameters.Region, ' — ', pipeline().parameters.OrderDate)",
+						"body": {
+							"ordersIngested": "@variables('TotalOrdersIngested')",
+							"ordersRejected": "@variables('TotalOrdersRejected')",
+							"totalRevenue": "@variables('TotalRevenue')",
+							"region": "@pipeline().parameters.Region",
+							"orderDate": "@pipeline().parameters.OrderDate",
+							"pipelineStatus": "@variables('PipelineStatus')",
+							"runDurationSeconds": "@div(sub(ticks(utcnow()), ticks(variables('RunStartTime'))), 10000000)"
+						}
+					}
+				}
+			},
+			{
+				"name": "HandlePipelineFailure",
+				"description": "Catch any pipeline failure and send alert to on-call team",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "FetchOrdersFromAPI",
+						"dependencyConditions": [
+							"Failed"
+						]
+					},
+					{
+						"activity": "CheckAPIResponse",
+						"dependencyConditions": [
+							"Failed"
+						]
+					},
+					{
+						"activity": "RunOrderSummaryReport",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://oncall-alerts.company.com/api/incident",
+					"body": {
+						"severity": "HIGH",
+						"pipelineName": "@pipeline().Pipeline",
+						"runId": "@pipeline().RunId",
+						"orderDate": "@pipeline().parameters.OrderDate",
+						"region": "@pipeline().parameters.Region",
+						"errorMessage": "@activity('FetchOrdersFromAPI').error.message",
+						"errorCode": "@activity('FetchOrdersFromAPI').error.errorCode",
+						"notifyEmail": "@pipeline().parameters.NotifyEmail",
+						"environment": "@pipeline().parameters.Environment",
+						"timestamp": "@utcnow()"
+					}
+				}
+			},
+			{
+				"name": "FinalAuditLog",
+				"description": "Always-run audit log — captures full run result for compliance",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "SendDailySummaryEmail",
+						"dependencyConditions": [
+							"Succeeded",
+							"Skipped"
+						]
+					},
+					{
+						"activity": "HandlePipelineFailure",
+						"dependencyConditions": [
+							"Succeeded",
+							"Skipped"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.00:02:00",
+					"retry": 3,
+					"retryIntervalInSeconds": 30
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": {
+						"value": "@concat('https://audit.company.com/log/', pipeline().parameters.Environment)",
+						"type": "Expression"
+					},
+					"body": {
+						"event": "PIPELINE_COMPLETED",
+						"pipelineName": "@pipeline().Pipeline",
+						"runId": "@pipeline().RunId",
+						"orderDate": "@pipeline().parameters.OrderDate",
+						"region": "@pipeline().parameters.Region",
+						"ordersIngested": "@variables('TotalOrdersIngested')",
+						"ordersRejected": "@variables('TotalOrdersRejected')",
+						"totalRevenue": "@variables('TotalRevenue')",
+						"finalStatus": "@variables('PipelineStatus')",
+						"startTime": "@variables('RunStartTime')",
+						"endTime": "@utcnow()",
+						"durationSeconds": "@div(sub(ticks(utcnow()), ticks(variables('RunStartTime'))), 10000000)",
+						"environment": "@pipeline().parameters.Environment"
+					}
+				}
+			}
+		],
+		"concurrency": 1,
+		"policy": {
+			"elapsedTimeMetric": {
+				"duration": "0.02:00:00"
+			}
+		},
+		"parameters": {
+			"OrderDate": {
+				"type": "String",
+				"defaultValue": "@formatDateTime(utcnow(), 'yyyy-MM-dd')"
+			},
+			"Region": {
+				"type": "String",
+				"defaultValue": "US"
+			},
+			"MinOrderValue": {
+				"type": "Float",
+				"defaultValue": 10
+			},
+			"RetryCount": {
+				"type": "Int",
+				"defaultValue": 3
+			},
+			"NotifyEmail": {
+				"type": "String",
+				"defaultValue": "orders-team@company.com"
+			},
+			"Environment": {
+				"type": "String",
+				"defaultValue": "Production"
+			}
+		},
+		"variables": {
+			"TotalOrdersIngested": {
+				"type": "Integer",
+				"defaultValue": 0
+			},
+			"TotalOrdersRejected": {
+				"type": "Integer",
+				"defaultValue": 0
+			},
+			"TotalRevenue": {
+				"type": "Float",
+				"defaultValue": "0"
+			},
+			"PipelineStatus": {
+				"type": "String",
+				"defaultValue": "Running"
+			},
+			"RunStartTime": {
+				"type": "String"
+			}
+		},
+		"annotations": [
+			"CustomerOrders",
+			"ETL",
+			"Production",
+			"Claude Demo"
+		]
 	}
 }
