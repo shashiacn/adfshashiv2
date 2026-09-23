@@ -1,0 +1,6 @@
+{
+	"name": "CustomerOrdersETLPipeline",
+	"properties": {
+		"annotations": []
+	}
+}
