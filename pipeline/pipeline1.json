@@ -1,45 +1,126 @@
 {
 	"name": "pipeline1",
 	"properties": {
+		"parameters": {
+			"SourceSystem": { "type": "String" },
+			"SourceSchema": { "type": "String" },
+			"SourceTable": { "type": "String" }
+		},
 		"activities": [
 			{
-				"name": "InitializeDelay",
-				"type": "Wait",
-				"userProperties": [],
+				"name": "LookupWatermarkConfig",
+				"type": "Lookup",
+				"policy": { "timeout": "0.12:00:00", "retry": 1, "retryIntervalInSeconds": 30, "secureOutput": false, "secureInput": false },
 				"typeProperties": {
-					"waitTimeInSeconds": 8
-				}
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "@concat('SELECT TOP (1) WatermarkColumn, WatermarkColumnType, LastWatermarkValue, TargetContainer, TargetDirectory, TargetFileNamePrefix, CustomSQLFilter FROM dbo.WatermarkConfig WHERE SourceSystem = ''', replace(pipeline().parameters.SourceSystem,'''',''''''), ''' AND SourceSchema = ''', replace(pipeline().parameters.SourceSchema,'''',''''''), ''' AND SourceTable = ''', replace(pipeline().parameters.SourceTable,'''',''''''), ''' AND IsActive = 1')",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00"
+					},
+					"dataset": {
+						"referenceName": "ds_AzureSqlTable",
+						"type": "DatasetReference",
+						"parameters": { "schema": "dbo", "table": "WatermarkConfig" }
+					},
+					"firstRowOnly": true
+				},
+				"userProperties": []
 			},
 			{
-				"name": "SetStatusVariable",
-				"type": "SetVariable",
+				"name": "GetBatchWatermark",
+				"type": "Lookup",
 				"dependsOn": [
+					{ "activity": "LookupWatermarkConfig", "dependencyConditions": [ "Succeeded" ] }
+				],
+				"policy": { "timeout": "0.12:00:00", "retry": 1, "retryIntervalInSeconds": 30, "secureOutput": false, "secureInput": false },
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "@concat('SELECT COALESCE(CONVERT(nvarchar(100), MAX([', activity('LookupWatermarkConfig').output.firstRow.WatermarkColumn, ']), 126), ''', replace(string(activity('LookupWatermarkConfig').output.firstRow.LastWatermarkValue),'''',''''''), ''') AS BatchWatermark FROM [', pipeline().parameters.SourceSchema, '].[', pipeline().parameters.SourceTable, '] WHERE [', activity('LookupWatermarkConfig').output.firstRow.WatermarkColumn, '] > ''', replace(string(activity('LookupWatermarkConfig').output.firstRow.LastWatermarkValue),'''',''''''), '''', if(empty(activity('LookupWatermarkConfig').output.firstRow.CustomSQLFilter), '', concat(' AND (', activity('LookupWatermarkConfig').output.firstRow.CustomSQLFilter, ')'))) ",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00"
+					},
+					"dataset": {
+						"referenceName": "ds_AzureSqlTable",
+						"type": "DatasetReference",
+						"parameters": {
+							"schema": { "value": "@pipeline().parameters.SourceSchema", "type": "Expression" },
+							"table": { "value": "@pipeline().parameters.SourceTable", "type": "Expression" }
+						}
+					},
+					"firstRowOnly": true
+				},
+				"userProperties": []
+			},
+			{
+				"name": "CopyIncrementalToParquet",
+				"type": "Copy",
+				"dependsOn": [
+					{ "activity": "GetBatchWatermark", "dependencyConditions": [ "Succeeded" ] }
+				],
+				"policy": { "timeout": "0.12:00:00", "retry": 1, "retryIntervalInSeconds": 30, "secureOutput": false, "secureInput": false },
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "@concat('SELECT * FROM [', pipeline().parameters.SourceSchema, '].[', pipeline().parameters.SourceTable, '] WHERE [', activity('LookupWatermarkConfig').output.firstRow.WatermarkColumn, '] > ''', replace(string(activity('LookupWatermarkConfig').output.firstRow.LastWatermarkValue),'''',''''''), ''' AND [', activity('LookupWatermarkConfig').output.firstRow.WatermarkColumn, '] <= ''', replace(string(activity('GetBatchWatermark').output.firstRow.BatchWatermark),'''',''''''), '''', if(empty(activity('LookupWatermarkConfig').output.firstRow.CustomSQLFilter), '', concat(' AND (', activity('LookupWatermarkConfig').output.firstRow.CustomSQLFilter, ')'))) ",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00"
+					},
+					"sink": { "type": "ParquetSink", "storeSettings": { "type": "AzureBlobFSWriteSettings" }, "formatSettings": { "type": "ParquetWriteSettings" } },
+					"enableStaging": false,
+					"translator": { "type": "TabularTranslator", "typeConversion": true, "typeConversionSettings": { "allowDataTruncation": true, "treatBooleanAsNumber": false } }
+				},
+				"inputs": [
 					{
-						"activity": "InitializeDelay",
-						"dependencyConditions": [
-							"Succeeded"
-						]
+						"referenceName": "ds_AzureSqlTable",
+						"type": "DatasetReference",
+						"parameters": {
+							"schema": { "value": "@pipeline().parameters.SourceSchema", "type": "Expression" },
+							"table": { "value": "@pipeline().parameters.SourceTable", "type": "Expression" }
+						}
 					}
 				],
-				"policy": {
-					"secureOutput": false,
-					"secureInput": false
-				},
-				"userProperties": [],
+				"outputs": [
+					{
+						"referenceName": "ds_ADLSParquet",
+						"type": "DatasetReference",
+						"parameters": {
+							"container": { "value": "@activity('LookupWatermarkConfig').output.firstRow.TargetContainer", "type": "Expression" },
+							"directory": { "value": "@concat(activity('LookupWatermarkConfig').output.firstRow.TargetDirectory, '/run_date=', formatDateTime(utcNow(), 'yyyy-MM-dd'))", "type": "Expression" },
+							"fileName": { "value": "@concat(activity('LookupWatermarkConfig').output.firstRow.TargetFileNamePrefix, '_', pipeline().RunId, '.parquet')", "type": "Expression" }
+						}
+					}
+				]
+			},
+			{
+				"name": "UpdateWatermarkAndAudit",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{ "activity": "CopyIncrementalToParquet", "dependencyConditions": [ "Succeeded" ] }
+				],
+				"policy": { "timeout": "0.12:00:00", "retry": 1, "retryIntervalInSeconds": 30, "secureOutput": false, "secureInput": false },
+				"linkedServiceName": { "referenceName": "AzureSqlDatabaseLS", "type": "LinkedServiceReference" },
 				"typeProperties": {
-					"variableName": "FinalStatusMessage",
-					"value": {
-						"value": "@concat('Pipeline executed successfully after a ', activity('InitializeDelay').output.duration, ' second delay.')",
-						"type": "Expression"
+					"storedProcedureName": "dbo.usp_UpdateWatermarkConfig",
+					"storedProcedureParameters": {
+						"SourceSystem": { "value": { "value": "@pipeline().parameters.SourceSystem", "type": "Expression" }, "type": "String" },
+						"SourceSchema": { "value": { "value": "@pipeline().parameters.SourceSchema", "type": "Expression" }, "type": "String" },
+						"SourceTable": { "value": { "value": "@pipeline().parameters.SourceTable", "type": "Expression" }, "type": "String" },
+						"NewWatermarkValue": { "value": { "value": "@string(activity('GetBatchWatermark').output.firstRow.BatchWatermark)", "type": "Expression" }, "type": "String" },
+						"LastRunStatus": { "value": "Success", "type": "String" },
+						"LastRunDateTime": { "value": { "value": "@utcNow()", "type": "Expression" }, "type": "DateTime" },
+						"ErrorMessage": { "value": "", "type": "String" }
 					}
 				}
 			}
 		],
-		"variables": {
-			"FinalStatusMessage": {
-				"type": "String"
-			}
-		},
 		"annotations": []
 	}
 }
